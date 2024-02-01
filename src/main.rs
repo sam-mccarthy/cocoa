@@ -1,39 +1,62 @@
 use std::env;
-use serenity::all::standard::macros::group;
+use poise::serenity_prelude as serenity;
 
-use serenity::async_trait;
-use serenity::prelude::*;
-use serenity::framework::standard::{StandardFramework, Configuration, CommandResult};
+mod flavors;
+use flavors::{silly};
 
-mod flavors {
-    mod silly;
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
+
+struct Data {
+    database: sqlx::SqlitePool,
 }
-
-#[group]
-#[commands(ping)]
-struct Silly;
-
-struct Handler;
-
-#[async_trait]
-impl EventHandler for Handler {}
 
 #[tokio::main]
 async fn main() {
-    let framework = StandardFramework::new()
-        .group(&SILLY_GROUP);
-    framework.configure(Configuration::new().prefix("-"));
+    env_logger::init();
 
-    let token = env::var("DISCORD_TOKEN").expect("token");
-    let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
-
-    let mut client = Client::builder(token, intents)
-        .event_handler(Handler)
-        .framework(framework)
+    let database = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename("database.sqlite")
+                .create_if_missing(true),
+        )
         .await
-        .expect("Error creating client");
+        .expect("Couldn't connect to user database.");
+    sqlx::migrate!("./migrations").run(&database).await.expect("Failed database migration.");
 
-    if let Err(why) = client.start().await {
-        println!("An error occurred while running the client: {:?}", why);
-    }
+    let user_data = Data {
+        database,
+    };
+
+    let options = poise::FrameworkOptions {
+        commands: vec![silly::ping()],
+        prefix_options: poise::PrefixFrameworkOptions {
+            prefix: Some("-".into()),
+            ..Default::default()
+        },
+
+        ..Default::default()
+    };
+
+    let framework = poise::Framework::builder()
+        .setup(move |ctx, _ready, framework| {
+            Box::pin(async move {
+                println!("Logged into {} guilds as {}", _ready.guilds.len(), _ready.user.name);
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                Ok(user_data)
+            })
+        })
+        .options(options)
+        .build();
+
+    let token = env::var("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN environment variable.");
+    let intents = serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
+
+    let client = serenity::ClientBuilder::new(token, intents)
+        .framework(framework)
+        .await;
+
+    client.unwrap().start().await.unwrap();
 }
