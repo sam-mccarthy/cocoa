@@ -9,6 +9,7 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 
 struct Data {
     database: sqlx::SqlitePool,
+    lastfm_key: String
 }
 
 #[tokio::main]
@@ -24,10 +25,13 @@ async fn main() {
         )
         .await
         .expect("Couldn't connect to user database.");
+
     sqlx::migrate!("./migrations").run(&database).await.expect("Failed database migration.");
 
-    let user_data = Data {
+    let lastfm_key = env::var("LASTFM_KEY").expect("Missing LASTFM_KEY environment variable");
+    let ctx_data = Data {
         database,
+        lastfm_key
     };
 
     let options = poise::FrameworkOptions {
@@ -45,7 +49,7 @@ async fn main() {
             Box::pin(async move {
                 println!("Logged into {} guilds as {}", _ready.guilds.len(), _ready.user.name);
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(user_data)
+                Ok(ctx_data)
             })
         })
         .options(options)
