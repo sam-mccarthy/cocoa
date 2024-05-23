@@ -1,15 +1,14 @@
+use poise::{serenity_prelude as serenity, FrameworkOptions};
 use std::env;
-use poise::serenity_prelude as serenity;
 
 mod flavors;
-use flavors::{silly};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 struct Data {
     database: sqlx::SqlitePool,
-    lastfm_key: String
+    lastfm_key: String,
 }
 
 #[tokio::main]
@@ -26,16 +25,24 @@ async fn main() {
         .await
         .expect("Couldn't connect to user database.");
 
-    sqlx::migrate!("./migrations").run(&database).await.expect("Failed database migration.");
+    sqlx::migrate!("./migrations")
+        .run(&database)
+        .await
+        .expect("Failed database migration.");
 
     let lastfm_key = env::var("LASTFM_KEY").expect("Missing LASTFM_KEY environment variable");
     let ctx_data = Data {
         database,
-        lastfm_key
+        lastfm_key,
     };
 
-    let options = poise::FrameworkOptions {
-        commands: vec![silly::ping()],
+    let options: FrameworkOptions<Data, Error> = poise::FrameworkOptions {
+        commands: vec![
+            flavors::lastfm::link(),
+            flavors::lastfm::profile(),
+            flavors::lastfm::nowplaying(),
+            flavors::silly::ping(),
+        ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: Some("-".into()),
             ..Default::default()
@@ -47,7 +54,11 @@ async fn main() {
     let framework = poise::Framework::builder()
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                println!("Logged into {} guilds as {}", _ready.guilds.len(), _ready.user.name);
+                println!(
+                    "Logged into {} guilds as {}",
+                    _ready.guilds.len(),
+                    _ready.user.name
+                );
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(ctx_data)
             })
@@ -56,7 +67,8 @@ async fn main() {
         .build();
 
     let token = env::var("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN environment variable.");
-    let intents = serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
+    let intents =
+        serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
 
     let client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
