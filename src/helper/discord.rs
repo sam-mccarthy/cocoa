@@ -3,15 +3,8 @@ use crate::Context;
 use poise::{serenity_prelude as serenity, ReplyHandle};
 use serenity::{Colour, CreateEmbedAuthor};
 
-pub fn cocoa_embed(ctx: Context<'_>) -> serenity::CreateEmbed {
-    let author_str = format!(
-        "{} - [{}]",
-        ctx.author()
-            .global_name
-            .as_ref()
-            .unwrap_or(&ctx.author().name),
-        ctx.command().name
-    );
+pub async fn cocoa_embed(ctx: Context<'_>) -> serenity::CreateEmbed {
+    let author_str = format!("{}!", ctx.command().name);
 
     serenity::CreateEmbed::new()
         .color(Colour::from_rgb(255, 166, 248))
@@ -28,7 +21,7 @@ pub async fn cocoa_reply_str(
     ctx: Context<'_>,
     text: String,
 ) -> Result<ReplyHandle<'_>, serenity::Error> {
-    let embed = cocoa_embed(ctx).description(text);
+    let embed = cocoa_embed(ctx).await.description(text);
     cocoa_reply_embed(ctx, embed).await
 }
 

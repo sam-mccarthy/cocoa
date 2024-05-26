@@ -43,6 +43,10 @@ async fn main() {
             flavors::lastfm::profile(),
             flavors::lastfm::nowplaying(),
             flavors::lastfm::recent(),
+            flavors::lastfm::unlink(),
+            flavors::lastfm::topalbums(),
+            flavors::lastfm::topartists(),
+            flavors::lastfm::toptracks(),
             flavors::silly::ping(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {

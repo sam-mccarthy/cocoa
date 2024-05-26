@@ -4,17 +4,12 @@ a fun, general-purpose discord bot written in rust
 
 ## todo
 
-implement some more LastFM commands
-> recent > top ...
-
-theorize more efficient embed usage
-
-economy
-
-gambling
-
-personal profile / levels / message xp
-
-organize error handling and error messages
-
-more to come ... (anime character rolling a la Mudae)
+* create a Dockerfile\
+* personal profile / levels / message xp\
+* economy\
+* gambling\
+* implement a few more lastfm commands\
+* lastfm scraping?\
+* dedicated lastfm api objects to make parsing easier\
+* anime character rolling (a la Mudae, but twisted)\
+  more to come ...

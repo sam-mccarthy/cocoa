@@ -10,38 +10,39 @@ pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
     let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
 
-    let value = api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user_str).await?;
+    let data = api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user_str).await?;
 
     let scrobbles = format!(
         "{} scrobbles",
-        value["user"]["playcount"].as_str().unwrap_or("N/A")
+        data["user"]["playcount"].as_str().unwrap_or("N/A")
     );
 
     let tracks = format!(
         "**{}** tracks",
-        value["user"]["track_count"].as_str().unwrap_or("N/A")
+        data["user"]["track_count"].as_str().unwrap_or("N/A")
     );
     let albums = format!(
         "**{}** albums",
-        value["user"]["album_count"].as_str().unwrap_or("N/A")
+        data["user"]["album_count"].as_str().unwrap_or("N/A")
     );
     let artists = format!(
         "**{}** artists",
-        value["user"]["artist_count"].as_str().unwrap_or("N/A")
+        data["user"]["artist_count"].as_str().unwrap_or("N/A")
     );
 
     let count_field = format!("{}\n{}\n{}", tracks, albums, artists);
 
-    let registration_unix = value["user"]["registered"]["unixtime"]
+    let registration_unix = data["user"]["registered"]["unixtime"]
         .as_str()
         .unwrap_or("0")
         .parse::<i64>()?;
     let registration_ago = format!("<t:{}:R>", registration_unix);
 
-    let country = value["user"]["country"].as_str().unwrap_or("N/A");
-    let profile_pic = value["user"]["image"][2]["#text"].as_str().unwrap_or("");
+    let country = data["user"]["country"].as_str().unwrap_or("N/A");
+    let profile_pic = data["user"]["image"][2]["#text"].as_str().unwrap_or("");
 
     let embed = cocoa_embed(ctx)
+        .await
         .thumbnail(profile_pic)
         .title(user_str)
         .field(scrobbles, count_field, true)
@@ -146,16 +147,22 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
         .as_str()
         .unwrap_or("");
 
-    let title = format!(
-        "{} — {} `[{}:{}]`",
-        artist_name,
-        track_name,
-        length / 60000,
-        (length % 60000) / 1000
-    );
+    let title = if length > 0 {
+        format!(
+            "{} — {} `[{}:{}]`",
+            artist_name,
+            track_name,
+            length / 60000,
+            (length % 60000) / 1000
+        )
+    } else {
+        format!("{} — {}", artist_name, track_name,)
+    };
+
     let description = format!(":cd: {}\n> {} plays", album_name, play_count);
 
     let embed = cocoa_embed(ctx)
+        .await
         .thumbnail(album_cover)
         .title(title)
         .description(description)
@@ -167,46 +174,110 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn recent(ctx: Context<'_>) -> Result<(), Error> {
+    list(ctx, "user.getRecentTracks&limit=12", |(_, obj)| {
+        let artist = obj["artist"]["#text"].as_str().unwrap_or("???");
+        let name = obj["name"].as_str().unwrap_or("???");
+
+        let timestamp = obj["date"]["uts"]
+            .as_str()
+            .unwrap_or("0")
+            .parse::<i64>()
+            .unwrap();
+        let ago = if timestamp != 0 {
+            timeago::Formatter::new()
+                .convert_chrono(DateTime::from_timestamp(timestamp, 0).unwrap(), Utc::now())
+        } else {
+            String::from("a moment ago")
+        };
+
+        format!("`{}` **{} — {}**", ago, artist, name)
+    })
+    .await
+}
+
+#[poise::command(prefix_command, slash_command)]
+pub async fn topalbums(ctx: Context<'_>) -> Result<(), Error> {
+    list(ctx, "user.getTopAlbums&limit=12", |(idx, obj)| {
+        let plays = obj["playcount"].as_str().unwrap_or("0");
+        let artist = obj["artist"]["name"].as_str().unwrap_or("???");
+        let album = obj["name"].as_str().unwrap_or("???");
+        format!(
+            "`#{: >2}` **{}** plays • **{} — {}**",
+            idx + 1,
+            plays,
+            artist,
+            album
+        )
+    })
+    .await
+}
+
+#[poise::command(prefix_command, slash_command)]
+pub async fn topartists(ctx: Context<'_>) -> Result<(), Error> {
+    list(ctx, "user.getTopArtists&limit=12", |(idx, obj)| {
+        let plays = obj["playcount"].as_str().unwrap_or("0");
+        let artist = obj["name"].as_str().unwrap_or("???");
+        format!("`#{: >2}` **{}** plays • **{}**", idx + 1, plays, artist)
+    })
+    .await
+}
+
+#[poise::command(prefix_command, slash_command)]
+pub async fn toptracks(ctx: Context<'_>) -> Result<(), Error> {
+    list(ctx, "user.getTopTracks&limit=12", |(idx, obj)| {
+        let plays = obj["playcount"].as_str().unwrap_or("0");
+        let artist = obj["artist"]["name"].as_str().unwrap_or("???");
+        let song = obj["name"].as_str().unwrap_or("???");
+        format!(
+            "`#{: >2}` **{}** plays • **{} — {}**",
+            idx + 1,
+            plays,
+            artist,
+            song
+        )
+    })
+    .await
+}
+
+pub async fn list(
+    ctx: Context<'_>,
+    api_method: &str,
+    parser: fn((usize, &serde_json::Value)) -> String,
+) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
     let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
 
-    let data = api::get_from_lastfm(
-        &ctx.data().lastfm_key,
-        "user.getRecentTracks&limit=10",
-        &user_str,
-    )
-    .await?;
+    let data = api::get_from_lastfm(&ctx.data().lastfm_key, &api_method, &user_str).await?;
 
-    let songs = data["recenttracks"]["track"]
+    let keys = match api_method.split('&').next().unwrap_or("") {
+        "user.getTopTracks" => ("toptracks", "track"),
+        "user.getTopArtists" => ("topartists", "artist"),
+        "user.getTopAlbums" => ("topalbums", "album"),
+        "user.getRecentTracks" => ("recenttracks", "track"),
+        _ => panic!("unimplemented!"),
+    };
+
+    let list_items = &data[keys.0][keys.1];
+
+    let songs = list_items
         .as_array()
-        .ok_or("Failed to parse.")?
+        .ok_or("List of items is not a list.")?
         .iter()
-        .map(|obj| {
-            let artist = obj["artist"]["#text"].as_str().unwrap_or("???");
-            let name = obj["name"].as_str().unwrap_or("???");
-
-            let timestamp = obj["date"]["uts"]
-                .as_str()
-                .unwrap_or("0")
-                .parse::<i64>()
-                .unwrap();
-            let ago = if timestamp != 0 {
-                timeago::Formatter::new()
-                    .convert_chrono(DateTime::from_timestamp(timestamp, 0).unwrap(), Utc::now())
-            } else {
-                String::from("Now")
-            };
-
-            format!("`{}` **{} — {}**", ago, artist, name)
-        })
+        .enumerate()
+        .map(parser)
         .collect::<Vec<String>>()
         .join("\n");
 
-    let album_cover = data["recenttracks"]["track"][0]["image"][2]["#text"]
-        .as_str()
-        .unwrap_or("");
-
-    let embed = cocoa_embed(ctx).thumbnail(album_cover).description(songs);
+    let album_cover = list_items[0]["image"][2]["#text"].as_str().unwrap_or("");
+    let total = format!(
+        "total: {}",
+        data[keys.0]["@attr"]["total"].as_str().unwrap_or("0")
+    );
+    let embed = cocoa_embed(ctx)
+        .await
+        .thumbnail(album_cover)
+        .description(songs)
+        .footer(CreateEmbedFooter::new(total));
     cocoa_reply_embed(ctx, embed).await?;
     Ok(())
 }

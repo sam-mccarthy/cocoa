@@ -18,11 +18,10 @@ pub async fn get_from_lastfm(api_key: &str, method: &str, user: &String) -> Resu
 }
 
 pub async fn get_from_endpoint(url: &String) -> Result<Value, Error> {
-    let json = reqwest::get(url).await?.text().await?;
-    let parsed: Value = serde_json::from_str(&json)?;
-
-    if parsed["error"].is_null() {
-        Ok(parsed)
+    let req = reqwest::get(url).await?;
+    if req.status() == 200 {
+        let text = &req.text().await?;
+        Ok(serde_json::from_str(&text)?)
     } else {
         Err(Error::from("Failed endpoint request."))
     }

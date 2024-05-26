@@ -18,3 +18,4 @@ reqwest = "0.11.24"
 
 timeago = "0.4.2"
 chrono = "0.4.38"
+serde = { version = "1.0.196", features = ["derive"] }
