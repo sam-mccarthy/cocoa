@@ -1,37 +1,16 @@
-use crate::helper::api::get_from_lastfm;
+use crate::helper::{api, data};
 use crate::{Context, Error};
 
-use crate::helper::data::fetch_lastfm_username;
+use crate::helper::discord::{cocoa_embed, cocoa_reply_embed, cocoa_reply_str};
 use chrono::{DateTime, Utc};
-use poise::serenity_prelude as serenity;
-use poise::serenity_prelude::{Colour, CreateEmbedAuthor, CreateEmbedFooter};
-use reqwest;
-
-#[poise::command(
-    prefix_command,
-    slash_command,
-    subcommands(
-        "profile",
-        "link",
-        "nowplaying",
-        "topartists",
-        "toptracks",
-        "topalbums",
-        "recent"
-    )
-)]
-pub async fn lastfm(ctx: Context<'_>) -> Result<(), Error> {
-    Ok(())
-}
+use poise::serenity_prelude::CreateEmbedFooter;
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
-    let user_str = fetch_lastfm_username(&ctx.data().database, id).await?;
+    let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
 
-    let value = get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user_str)
-        .await
-        .expect("LastFM request failed.");
+    let value = api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user_str).await?;
 
     let scrobbles = format!(
         "{} scrobbles",
@@ -62,17 +41,14 @@ pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
     let country = value["user"]["country"].as_str().unwrap_or("N/A");
     let profile_pic = value["user"]["image"][2]["#text"].as_str().unwrap_or("");
 
-    let embed = serenity::CreateEmbed::new()
-        .color(Colour::from_rgb(255, 166, 248))
+    let embed = cocoa_embed(ctx)
         .thumbnail(profile_pic)
         .title(user_str)
         .field(scrobbles, count_field, true)
         .field("registered", registration_ago, true)
         .field("country", country, true);
 
-    ctx.send(poise::CreateReply::default().embed(embed).reply(true))
-        .await
-        .expect("Message reply failed.");
+    cocoa_reply_embed(ctx, embed).await?;
     Ok(())
 }
 
@@ -81,9 +57,7 @@ pub async fn link(
     ctx: Context<'_>,
     #[description = "Profile to link"] user: String,
 ) -> Result<(), Error> {
-    get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user)
-        .await
-        .expect("User doesn't exist.");
+    api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user).await?;
 
     let uid = &ctx.author().id.to_string();
     match sqlx::query!(
@@ -95,23 +69,38 @@ pub async fn link(
     .await
     {
         Ok(_) => {
-            ctx.reply("Success! LastFM linked.").await?;
+            cocoa_reply_str(ctx, String::from("Success! LastFM linked.")).await?;
             Ok(())
         }
         Err(_) => {
             return Err(Error::from(
-                "you already have an account attached (or something else broke)",
+                "You already have an account attached (or something else broke).",
             ))
         }
     }
 }
 
 #[poise::command(prefix_command, slash_command)]
+pub async fn unlink(ctx: Context<'_>) -> Result<(), Error> {
+    let uid = &ctx.author().id.to_string();
+    match sqlx::query!("DELETE FROM lastfm WHERE user_id = ?", uid)
+        .execute(&ctx.data().database)
+        .await
+    {
+        Ok(_) => {
+            cocoa_reply_str(ctx, String::from("Success! LastFM unlinked.")).await?;
+            Ok(())
+        }
+        Err(_) => return Err(Error::from("You don't have a LastFM account linked.")),
+    }
+}
+
+#[poise::command(prefix_command, slash_command)]
 pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
-    let user_str = fetch_lastfm_username(&ctx.data().database, id).await?;
+    let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
 
-    let track_coarse = get_from_lastfm(
+    let track_coarse = api::get_from_lastfm(
         &ctx.data().lastfm_key,
         "user.getRecentTracks&limit=1",
         &user_str,
@@ -120,16 +109,16 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
 
     let artist_name = track_coarse["recenttracks"]["track"][0]["artist"]["#text"]
         .as_str()
-        .expect("artist not found...?")
+        .ok_or("Artist not found, somehow.")?
         .to_string();
     let track_name = track_coarse["recenttracks"]["track"][0]["name"]
         .as_str()
-        .expect("track not found...?")
+        .ok_or("Track not found, somehow.")?
         .to_string();
 
     let method = format!("track.getInfo&artist={}&track={}", artist_name, track_name);
     let track_detailed =
-        get_from_lastfm(&ctx.data().lastfm_key, method.as_str(), &user_str).await?;
+        api::get_from_lastfm(&ctx.data().lastfm_key, method.as_str(), &user_str).await?;
 
     let length = track_detailed["track"]["duration"]
         .as_str()
@@ -142,9 +131,9 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
 
     let tags = track_detailed["track"]["toptags"]["tag"]
         .as_array()
-        .expect("Broken JSON deserialization (nowplaying)")
+        .ok_or("Broken JSON deserialization (nowplaying)")?
         .iter()
-        .map(|tag| tag["name"].as_str().expect("failed tag mapping"))
+        .map(|tag| tag["name"].as_str().unwrap_or("???"))
         .collect::<Vec<&str>>()
         .join(", ");
 
@@ -157,7 +146,6 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
         .as_str()
         .unwrap_or("");
 
-    let author = format!("{} is now playing...", user_str);
     let title = format!(
         "{} — {} `[{}:{}]`",
         artist_name,
@@ -167,40 +155,22 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
     );
     let description = format!(":cd: {}\n> {} plays", album_name, play_count);
 
-    let embed = serenity::CreateEmbed::new()
-        .color(Colour::from_rgb(255, 166, 248))
+    let embed = cocoa_embed(ctx)
         .thumbnail(album_cover)
         .title(title)
         .description(description)
         .footer(CreateEmbedFooter::new(tags));
 
-    ctx.send(poise::CreateReply::default().embed(embed).reply(true))
-        .await
-        .expect("Message reply failed.");
-    Ok(())
-}
-
-#[poise::command(prefix_command, slash_command)]
-pub async fn topartists(ctx: Context<'_>) -> Result<(), Error> {
-    Ok(())
-}
-
-#[poise::command(prefix_command, slash_command)]
-pub async fn toptracks(ctx: Context<'_>) -> Result<(), Error> {
-    Ok(())
-}
-
-#[poise::command(prefix_command, slash_command)]
-pub async fn topalbums(ctx: Context<'_>) -> Result<(), Error> {
+    cocoa_reply_embed(ctx, embed).await?;
     Ok(())
 }
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn recent(ctx: Context<'_>) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
-    let user_str = fetch_lastfm_username(&ctx.data().database, id).await?;
+    let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
 
-    let data = get_from_lastfm(
+    let data = api::get_from_lastfm(
         &ctx.data().lastfm_key,
         "user.getRecentTracks&limit=10",
         &user_str,
@@ -209,7 +179,7 @@ pub async fn recent(ctx: Context<'_>) -> Result<(), Error> {
 
     let songs = data["recenttracks"]["track"]
         .as_array()
-        .expect("Broken JSON deserialization (recent)")
+        .ok_or("Failed to parse.")?
         .iter()
         .map(|obj| {
             let artist = obj["artist"]["#text"].as_str().unwrap_or("???");
@@ -232,19 +202,11 @@ pub async fn recent(ctx: Context<'_>) -> Result<(), Error> {
         .collect::<Vec<String>>()
         .join("\n");
 
-    let author = format!("{} has listened to...", user_str);
     let album_cover = data["recenttracks"]["track"][0]["image"][2]["#text"]
         .as_str()
         .unwrap_or("");
 
-    let embed = serenity::CreateEmbed::new()
-        .color(Colour::from_rgb(255, 166, 248))
-        .thumbnail(album_cover)
-        .author(CreateEmbedAuthor::new(author))
-        .description(songs);
-
-    ctx.send(poise::CreateReply::default().embed(embed).reply(true))
-        .await
-        .expect("Message reply failed.");
+    let embed = cocoa_embed(ctx).thumbnail(album_cover).description(songs);
+    cocoa_reply_embed(ctx, embed).await?;
     Ok(())
 }

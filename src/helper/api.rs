@@ -14,10 +14,10 @@ pub async fn get_from_lastfm(api_key: &str, method: &str, user: &String) -> Resu
         api_key, method, user_param_name, user
     );
 
-    get_from_endpoint(&endpoint, user).await
+    get_from_endpoint(&endpoint).await
 }
 
-pub async fn get_from_endpoint(url: &String, user: &String) -> Result<Value, Error> {
+pub async fn get_from_endpoint(url: &String) -> Result<Value, Error> {
     let json = reqwest::get(url).await?.text().await?;
     let parsed: Value = serde_json::from_str(&json)?;
 
