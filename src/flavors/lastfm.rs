@@ -1,9 +1,11 @@
+use crate::helper::api::get_from_lastfm;
 use crate::{Context, Error};
+
+use crate::helper::data::fetch_lastfm_username;
 use chrono::{DateTime, Utc};
 use poise::serenity_prelude as serenity;
 use poise::serenity_prelude::{Colour, CreateEmbedAuthor, CreateEmbedFooter};
 use reqwest;
-use serde_json::Value;
 
 #[poise::command(
     prefix_command,
@@ -24,59 +26,48 @@ pub async fn lastfm(ctx: Context<'_>) -> Result<(), Error> {
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
-    let id = ctx.author().id.get().to_string();
-    let user_rec = sqlx::query!("SELECT username FROM lastfm WHERE user_id = ?", id)
-        .fetch_one(&ctx.data().database)
-        .await?;
-    let user_str = user_rec.username.unwrap();
+    let id = ctx.author().id.to_string();
+    let user_str = fetch_lastfm_username(&ctx.data().database, id).await?;
 
-    let value = fetch_endpoint(&ctx.data().lastfm_key, "user.getInfo", &user_str)
+    let value = get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user_str)
         .await
         .expect("LastFM request failed.");
 
     let scrobbles = format!(
         "{} scrobbles",
-        value["user"]["playcount"].as_str().ok_or("N/A")?
+        value["user"]["playcount"].as_str().unwrap_or("N/A")
     );
 
     let tracks = format!(
         "**{}** tracks",
-        value["user"]["track_count"].as_str().ok_or("N/A")?
+        value["user"]["track_count"].as_str().unwrap_or("N/A")
     );
     let albums = format!(
         "**{}** albums",
-        value["user"]["album_count"].as_str().ok_or("N/A")?
+        value["user"]["album_count"].as_str().unwrap_or("N/A")
     );
     let artists = format!(
         "**{}** artists",
-        value["user"]["artist_count"].as_str().ok_or("N/A")?
+        value["user"]["artist_count"].as_str().unwrap_or("N/A")
     );
 
     let count_field = format!("{}\n{}\n{}", tracks, albums, artists);
 
     let registration_unix = value["user"]["registered"]["unixtime"]
         .as_str()
-        .ok_or("0")?
+        .unwrap_or("0")
         .parse::<i64>()?;
-    let registration_ndt: DateTime<Utc> = DateTime::from_timestamp(registration_unix, 0).unwrap();
-    let registration_ago = timeago::Formatter::new().convert_chrono(registration_ndt, Utc::now());
+    let registration_ago = format!("<t:{}:R>", registration_unix);
 
-    println!("{}\n{}\n{}", value, registration_unix, registration_ndt);
-    let registration_fmt = format!(
-        "{}\n{}",
-        registration_ago,
-        registration_ndt.format("%Y/%m/%d")
-    );
-
-    let country = value["user"]["country"].as_str().ok_or("N/A")?;
-    let profile_pic = value["user"]["image"][2]["#text"].as_str().ok_or("")?;
+    let country = value["user"]["country"].as_str().unwrap_or("N/A");
+    let profile_pic = value["user"]["image"][2]["#text"].as_str().unwrap_or("");
 
     let embed = serenity::CreateEmbed::new()
         .color(Colour::from_rgb(255, 166, 248))
         .thumbnail(profile_pic)
         .title(user_str)
         .field(scrobbles, count_field, true)
-        .field("registered", registration_fmt, true)
+        .field("registered", registration_ago, true)
         .field("country", country, true);
 
     ctx.send(poise::CreateReply::default().embed(embed).reply(true))
@@ -90,7 +81,7 @@ pub async fn link(
     ctx: Context<'_>,
     #[description = "Profile to link"] user: String,
 ) -> Result<(), Error> {
-    fetch_endpoint(&ctx.data().lastfm_key, "user.getInfo", &user)
+    get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user)
         .await
         .expect("User doesn't exist.");
 
@@ -117,13 +108,10 @@ pub async fn link(
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
-    let id = ctx.author().id.get().to_string();
-    let user_rec = sqlx::query!("SELECT username FROM lastfm WHERE user_id = ?", id)
-        .fetch_one(&ctx.data().database)
-        .await?;
-    let user_str = user_rec.username.unwrap();
+    let id = ctx.author().id.to_string();
+    let user_str = fetch_lastfm_username(&ctx.data().database, id).await?;
 
-    let track_coarse = fetch_endpoint(
+    let track_coarse = get_from_lastfm(
         &ctx.data().lastfm_key,
         "user.getRecentTracks&limit=1",
         &user_str,
@@ -140,51 +128,51 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
         .to_string();
 
     let method = format!("track.getInfo&artist={}&track={}", artist_name, track_name);
-    let track_detailed = fetch_endpoint(&ctx.data().lastfm_key, method.as_str(), &user_str).await?;
+    let track_detailed =
+        get_from_lastfm(&ctx.data().lastfm_key, method.as_str(), &user_str).await?;
 
-    println!("{}", track_detailed);
     let length = track_detailed["track"]["duration"]
         .as_str()
-        .ok_or("0")?
+        .unwrap_or("N/A")
         .parse::<i64>()?;
 
     let album_name = track_detailed["track"]["album"]["title"]
         .as_str()
-        .ok_or("0")?;
+        .unwrap_or("N/A");
 
-    let mut tags_map = track_detailed["track"]["toptags"]["tag"]
+    let tags = track_detailed["track"]["toptags"]["tag"]
         .as_array()
-        .expect("broken JSON deserialization")
+        .expect("Broken JSON deserialization (nowplaying)")
         .iter()
-        .map(|tag| tag["name"].as_str().expect("failed tag mapping"));
-    let tags_str = tags_map.collect::<Vec<&str>>().join(", ");
+        .map(|tag| tag["name"].as_str().expect("failed tag mapping"))
+        .collect::<Vec<&str>>()
+        .join(", ");
 
     let play_count = track_detailed["track"]["userplaycount"]
         .as_str()
-        .ok_or("0")?
+        .unwrap_or("0")
         .parse::<i64>()?;
 
     let album_cover = track_detailed["track"]["album"]["image"][2]["#text"]
         .as_str()
-        .ok_or("")?;
+        .unwrap_or("");
 
-    let title = format!("{} is now playing...", user_str);
-    let field_title = format!(
+    let author = format!("{} is now playing...", user_str);
+    let title = format!(
         "{} — {} `[{}:{}]`",
         artist_name,
         track_name,
         length / 60000,
         (length % 60000) / 1000
     );
-    let field_desc = format!(":cd: {}\n> {} plays", album_name, play_count);
+    let description = format!(":cd: {}\n> {} plays", album_name, play_count);
 
     let embed = serenity::CreateEmbed::new()
         .color(Colour::from_rgb(255, 166, 248))
         .thumbnail(album_cover)
-        .author(CreateEmbedAuthor::new(title))
-        .title(field_title)
-        .description(field_desc)
-        .footer(CreateEmbedFooter::new(tags_str));
+        .title(title)
+        .description(description)
+        .footer(CreateEmbedFooter::new(tags));
 
     ctx.send(poise::CreateReply::default().embed(embed).reply(true))
         .await
@@ -209,28 +197,54 @@ pub async fn topalbums(ctx: Context<'_>) -> Result<(), Error> {
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn recent(ctx: Context<'_>) -> Result<(), Error> {
+    let id = ctx.author().id.to_string();
+    let user_str = fetch_lastfm_username(&ctx.data().database, id).await?;
+
+    let data = get_from_lastfm(
+        &ctx.data().lastfm_key,
+        "user.getRecentTracks&limit=10",
+        &user_str,
+    )
+    .await?;
+
+    let songs = data["recenttracks"]["track"]
+        .as_array()
+        .expect("Broken JSON deserialization (recent)")
+        .iter()
+        .map(|obj| {
+            let artist = obj["artist"]["#text"].as_str().unwrap_or("???");
+            let name = obj["name"].as_str().unwrap_or("???");
+
+            let timestamp = obj["date"]["uts"]
+                .as_str()
+                .unwrap_or("0")
+                .parse::<i64>()
+                .unwrap();
+            let ago = if timestamp != 0 {
+                timeago::Formatter::new()
+                    .convert_chrono(DateTime::from_timestamp(timestamp, 0).unwrap(), Utc::now())
+            } else {
+                String::from("Now")
+            };
+
+            format!("`{}` **{} — {}**", ago, artist, name)
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    let author = format!("{} has listened to...", user_str);
+    let album_cover = data["recenttracks"]["track"][0]["image"][2]["#text"]
+        .as_str()
+        .unwrap_or("");
+
+    let embed = serenity::CreateEmbed::new()
+        .color(Colour::from_rgb(255, 166, 248))
+        .thumbnail(album_cover)
+        .author(CreateEmbedAuthor::new(author))
+        .description(songs);
+
+    ctx.send(poise::CreateReply::default().embed(embed).reply(true))
+        .await
+        .expect("Message reply failed.");
     Ok(())
-}
-
-pub async fn fetch_endpoint(api_key: &str, method: &str, user: &String) -> Result<Value, Error> {
-    let user_param_name = match method {
-        "user.getInfo" => "user",
-        "user.getRecentTracks" => "user",
-        "track.getInfo" => "username",
-        _ => "user",
-    };
-
-    let endpoint = format!(
-        "https://ws.audioscrobbler.com/2.0?format=json&api_key={}&method={}&{}={}",
-        api_key, method, user_param_name, user
-    );
-
-    let json = reqwest::get(endpoint).await?.text().await?;
-    let parsed: Value = serde_json::from_str(&json)?;
-
-    if parsed["error"].is_null() {
-        Ok(parsed)
-    } else {
-        Err(Error::from(""))
-    }
 }

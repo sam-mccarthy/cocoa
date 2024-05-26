@@ -1,7 +1,8 @@
-use poise::{serenity_prelude as serenity, FrameworkOptions};
+use poise::serenity_prelude as serenity;
 use std::env;
 
 mod flavors;
+mod helper;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
@@ -36,11 +37,12 @@ async fn main() {
         lastfm_key,
     };
 
-    let options: FrameworkOptions<Data, Error> = poise::FrameworkOptions {
+    let options: poise::FrameworkOptions<Data, Error> = poise::FrameworkOptions {
         commands: vec![
             flavors::lastfm::link(),
             flavors::lastfm::profile(),
             flavors::lastfm::nowplaying(),
+            flavors::lastfm::recent(),
             flavors::silly::ping(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {

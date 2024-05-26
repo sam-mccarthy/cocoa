@@ -4,11 +4,17 @@ a fun, general-purpose discord bot written in rust
 
 ## todo
 
-clean up code - replacing `serde_json::Value`s with dedicated types for LastFM JSON responses would clean things up
-significantly
+implement some more LastFM commands
+> recent > top ...
+
+theorize more efficient embed usage
+
+economy
+
+gambling
+
+personal profile / levels / message xp
 
 organize error handling and error messages
 
-economy + personal profile + xp handling
-
-more to come!
+more to come ... (anime character rolling a la Mudae)
