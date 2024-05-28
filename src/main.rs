@@ -1,3 +1,7 @@
+use crate::helper::data;
+use log::info;
+use mongodb::options::Credential;
+use mongodb::{options::ClientOptions, Client, Collection};
 use poise::serenity_prelude as serenity;
 use std::env;
 
@@ -8,32 +12,37 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 struct Data {
-    database: sqlx::SqlitePool,
+    collection: Collection<data::User>,
     lastfm_key: String,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Error> {
     env_logger::init();
 
-    let database = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(
-            sqlx::sqlite::SqliteConnectOptions::new()
-                .filename("database.sqlite")
-                .create_if_missing(true),
-        )
-        .await
-        .expect("Couldn't connect to user database.");
+    let discord_token =
+        env::var("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN environment variable.");
+    let mongo_addr = env::var("MONGO_ADDR").expect("Missing MONGO_ADDR environment variable.");
+    let mongo_user = env::var("MONGO_USER").expect("Missing MONGO_USER environment variable.");
+    let mongo_pass = env::var("MONGO_PASS").expect("Missing MONGO_PASS environment variable.");
+    let lastfm_key = env::var("LASTFM_KEY").expect("Missing LASTFM_KEY environment variable.");
 
-    sqlx::migrate!("./migrations")
-        .run(&database)
-        .await
-        .expect("Failed database migration.");
+    let mut client_options = ClientOptions::parse(format!("mongodb://{}", mongo_addr)).await?;
+    client_options.app_name = Some(String::from("cocoa"));
+    client_options.credential = Some(
+        Credential::builder()
+            .username(mongo_user)
+            .password(mongo_pass)
+            .build(),
+    );
 
-    let lastfm_key = env::var("LASTFM_KEY").expect("Missing LASTFM_KEY environment variable");
+    let client = Client::with_options(client_options).expect("Client connection failed.");
+
+    let db = client.database("cocoa");
+    let collection = db.collection::<data::User>("users");
+
     let ctx_data = Data {
-        database,
+        collection,
         lastfm_key,
     };
 
@@ -60,7 +69,7 @@ async fn main() {
     let framework = poise::Framework::builder()
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                println!(
+                info!(
                     "Logged into {} guilds as {}",
                     _ready.guilds.len(),
                     _ready.user.name
@@ -72,13 +81,15 @@ async fn main() {
         .options(options)
         .build();
 
-    let token = env::var("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN environment variable.");
     let intents =
         serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
 
-    let client = serenity::ClientBuilder::new(token, intents)
+    let client = serenity::ClientBuilder::new(discord_token, intents)
         .framework(framework)
         .await;
 
-    client.unwrap().start().await.unwrap();
+    match client?.start().await {
+        Ok(_) => Ok(()),
+        Err(e) => Err(Error::from(e.to_string())),
+    }
 }

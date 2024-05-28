@@ -3,12 +3,13 @@ use crate::{Context, Error};
 
 use crate::helper::discord::{cocoa_embed, cocoa_reply_embed, cocoa_reply_str};
 use chrono::{DateTime, Utc};
+use mongodb::bson::doc;
 use poise::serenity_prelude::CreateEmbedFooter;
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
-    let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
+    let user_str = data::fetch_lastfm_username(&ctx.data().collection, id).await?;
 
     let data = api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user_str).await?;
 
@@ -60,15 +61,16 @@ pub async fn link(
 ) -> Result<(), Error> {
     api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user).await?;
 
-    let uid = &ctx.author().id.to_string();
-    match sqlx::query!(
-        "INSERT INTO lastfm (user_id, username) VALUES (?, ?)",
-        uid,
-        user
-    )
-    .execute(&ctx.data().database)
-    .await
-    {
+    let uid = &ctx.author().id.get();
+    let user: data::User = data::User {
+        user_id: *uid,
+        currency: 0,
+        experience: 0,
+        command_count: 0,
+        lastfm_user: Some(user),
+    };
+
+    match ctx.data().collection.insert_one(user, None).await {
         Ok(_) => {
             cocoa_reply_str(ctx, String::from("Success! LastFM linked.")).await?;
             Ok(())
@@ -84,10 +86,8 @@ pub async fn link(
 #[poise::command(prefix_command, slash_command)]
 pub async fn unlink(ctx: Context<'_>) -> Result<(), Error> {
     let uid = &ctx.author().id.to_string();
-    match sqlx::query!("DELETE FROM lastfm WHERE user_id = ?", uid)
-        .execute(&ctx.data().database)
-        .await
-    {
+    let doc = doc! { "user_id": uid };
+    match ctx.data().collection.delete_one(doc, None).await {
         Ok(_) => {
             cocoa_reply_str(ctx, String::from("Success! LastFM unlinked.")).await?;
             Ok(())
@@ -99,7 +99,7 @@ pub async fn unlink(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(prefix_command, slash_command)]
 pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
-    let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
+    let user_str = data::fetch_lastfm_username(&ctx.data().collection, id).await?;
 
     let track_coarse = api::get_from_lastfm(
         &ctx.data().lastfm_key,
@@ -245,7 +245,7 @@ pub async fn list(
     parser: fn((usize, &serde_json::Value)) -> String,
 ) -> Result<(), Error> {
     let id = ctx.author().id.to_string();
-    let user_str = data::fetch_lastfm_username(&ctx.data().database, id).await?;
+    let user_str = data::fetch_lastfm_username(&ctx.data().collection, id).await?;
 
     let data = api::get_from_lastfm(&ctx.data().lastfm_key, &api_method, &user_str).await?;
 
