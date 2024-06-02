@@ -3,7 +3,7 @@ use log::info;
 use mongodb::options::Credential;
 use mongodb::{options::ClientOptions, Client, Collection};
 use poise::serenity_prelude as serenity;
-use std::env;
+use std::{env, fs};
 
 mod flavors;
 mod helper;
@@ -16,23 +16,47 @@ struct Data {
     lastfm_key: String,
 }
 
+struct Keys {
+    discord_token: String,
+    mongo_addr: String,
+    mongo_user: String,
+    mongo_pass: String,
+    lastfm_key: String,
+}
+
+fn load_env(key: &str) -> Result<String, Error> {
+    match env::var(key) {
+        Ok(str) => Some(str),
+        Err(_) => match env::var(format!("{}_FILE", key)) {
+            Ok(path) => fs::read_to_string(path).ok(),
+            Err(_) => None,
+        },
+    }
+    .ok_or(Error::from(format!(
+        "Missing environment variable: {}",
+        key
+    )))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     env_logger::init();
 
-    let discord_token =
-        env::var("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN environment variable.");
-    let mongo_addr = env::var("MONGO_ADDR").expect("Missing MONGO_ADDR environment variable.");
-    let mongo_user = env::var("MONGO_USER").expect("Missing MONGO_USER environment variable.");
-    let mongo_pass = env::var("MONGO_PASS").expect("Missing MONGO_PASS environment variable.");
-    let lastfm_key = env::var("LASTFM_KEY").expect("Missing LASTFM_KEY environment variable.");
+    let keys = Keys {
+        discord_token: load_env("DISCORD_TOKEN")?,
+        mongo_addr: load_env("MONGO_ADDR")?,
+        mongo_user: load_env("MONGO_USER")?,
+        mongo_pass: load_env("MONGO_PASS")?,
+        lastfm_key: load_env("LASTFM_KEY")?,
+    };
 
-    let mut client_options = ClientOptions::parse(format!("mongodb://{}", mongo_addr)).await?;
+    let mut client_options = ClientOptions::parse(format!("mongodb://{}", keys.mongo_addr)).await?;
     client_options.app_name = Some(String::from("cocoa"));
     client_options.credential = Some(
         Credential::builder()
-            .username(mongo_user)
-            .password(mongo_pass)
+            .username(keys.mongo_user)
+            .password(keys.mongo_pass)
+            .source(String::from("cocoa"))
             .build(),
     );
 
@@ -43,7 +67,7 @@ async fn main() -> Result<(), Error> {
 
     let ctx_data = Data {
         collection,
-        lastfm_key,
+        lastfm_key: keys.lastfm_key,
     };
 
     let options: poise::FrameworkOptions<Data, Error> = poise::FrameworkOptions {
@@ -52,7 +76,6 @@ async fn main() -> Result<(), Error> {
             flavors::lastfm::profile(),
             flavors::lastfm::nowplaying(),
             flavors::lastfm::recent(),
-            flavors::lastfm::unlink(),
             flavors::lastfm::topalbums(),
             flavors::lastfm::topartists(),
             flavors::lastfm::toptracks(),
@@ -84,7 +107,7 @@ async fn main() -> Result<(), Error> {
     let intents =
         serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
 
-    let client = serenity::ClientBuilder::new(discord_token, intents)
+    let client = serenity::ClientBuilder::new(keys.discord_token, intents)
         .framework(framework)
         .await;
 

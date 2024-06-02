@@ -1,0 +1,42 @@
+services:
+  cocoa:
+    build:
+      context: .
+    container_name: cocoa
+    depends_on:
+      - mongo
+    environment:
+      DISCORD_TOKEN_FILE: /run/secrets/DISCORD_TOKEN
+      MONGO_PASS_FILE: /run/secrets/MONGO_PASS
+      LASTFM_KEY_FILE: /run/secrets/LASTFM_KEY
+      MONGO_ADDR: mongo
+      MONGO_USER: cocoa
+    secrets:
+      - DISCORD_TOKEN
+      - MONGO_PASS
+      - LASTFM_KEY
+    restart: always
+    networks:
+      - cocoa
+
+  mongo:
+    image: mongo
+    container_name: mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: default
+      MONGO_INITDB_DATABASE: cocoa
+    command: --noscripting
+    volumes:
+      - ./mongo/mongod-init.js:/docker-entrypoint-initdb.d/mongod-init.js:ro
+    networks:
+      - cocoa
+secrets:
+  DISCORD_TOKEN:
+    file: ./secrets/discord_token
+  MONGO_PASS:
+    file: ./secrets/mongo_pass
+  LASTFM_KEY:
+    file: ./secrets/lastfm_key
+networks:
+  cocoa:

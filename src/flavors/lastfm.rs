@@ -1,15 +1,17 @@
+use chrono::{DateTime, Utc};
+use poise::serenity_prelude::CreateEmbedFooter;
+
+use crate::helper::discord::{cocoa_embed, cocoa_reply_embed, cocoa_reply_str};
 use crate::helper::{api, data};
 use crate::{Context, Error};
 
-use crate::helper::discord::{cocoa_embed, cocoa_reply_embed, cocoa_reply_str};
-use chrono::{DateTime, Utc};
-use mongodb::bson::doc;
-use poise::serenity_prelude::CreateEmbedFooter;
-
 #[poise::command(prefix_command, slash_command)]
 pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
-    let id = ctx.author().id.to_string();
-    let user_str = data::fetch_lastfm_username(&ctx.data().collection, id).await?;
+    let id = ctx.author().id.get();
+    let user_str = data::find_user(&ctx.data().collection, id)
+        .await?
+        .lastfm_user
+        .ok_or("No LastFM account connected.")?;
 
     let data = api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user_str).await?;
 
@@ -57,49 +59,24 @@ pub async fn profile(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(prefix_command, slash_command)]
 pub async fn link(
     ctx: Context<'_>,
-    #[description = "Profile to link"] user: String,
+    #[description = "Profile to link"] username: String,
 ) -> Result<(), Error> {
-    api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &user).await?;
+    api::get_from_lastfm(&ctx.data().lastfm_key, "user.getInfo", &username).await?;
 
-    let uid = &ctx.author().id.get();
-    let user: data::User = data::User {
-        user_id: *uid,
-        currency: 0,
-        experience: 0,
-        command_count: 0,
-        lastfm_user: Some(user),
-    };
+    let uid = ctx.author().id.get();
+    data::update_user(&ctx.data().collection, uid, "lastfm_user", username).await?;
 
-    match ctx.data().collection.insert_one(user, None).await {
-        Ok(_) => {
-            cocoa_reply_str(ctx, String::from("Success! LastFM linked.")).await?;
-            Ok(())
-        }
-        Err(_) => {
-            return Err(Error::from(
-                "You already have an account attached (or something else broke).",
-            ))
-        }
-    }
-}
-
-#[poise::command(prefix_command, slash_command)]
-pub async fn unlink(ctx: Context<'_>) -> Result<(), Error> {
-    let uid = &ctx.author().id.to_string();
-    let doc = doc! { "user_id": uid };
-    match ctx.data().collection.delete_one(doc, None).await {
-        Ok(_) => {
-            cocoa_reply_str(ctx, String::from("Success! LastFM unlinked.")).await?;
-            Ok(())
-        }
-        Err(_) => return Err(Error::from("You don't have a LastFM account linked.")),
-    }
+    cocoa_reply_str(ctx, String::from("LastFM user linked successfully!")).await?;
+    Ok(())
 }
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
-    let id = ctx.author().id.to_string();
-    let user_str = data::fetch_lastfm_username(&ctx.data().collection, id).await?;
+    let id = ctx.author().id.get();
+    let user_str = data::find_user(&ctx.data().collection, id)
+        .await?
+        .lastfm_user
+        .ok_or("No LastFM account connected.")?;
 
     let track_coarse = api::get_from_lastfm(
         &ctx.data().lastfm_key,
@@ -244,8 +221,11 @@ pub async fn list(
     api_method: &str,
     parser: fn((usize, &serde_json::Value)) -> String,
 ) -> Result<(), Error> {
-    let id = ctx.author().id.to_string();
-    let user_str = data::fetch_lastfm_username(&ctx.data().collection, id).await?;
+    let id = ctx.author().id.get();
+    let user_str = data::find_user(&ctx.data().collection, id)
+        .await?
+        .lastfm_user
+        .ok_or("No LastFM account connected.")?;
 
     let data = api::get_from_lastfm(&ctx.data().lastfm_key, &api_method, &user_str).await?;
 
