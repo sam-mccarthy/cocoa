@@ -25,17 +25,19 @@ struct Keys {
 }
 
 fn load_env(key: &str) -> Result<String, Error> {
-    match env::var(key) {
+    let Some(str) = (match env::var(key) {
         Ok(str) => Some(str),
         Err(_) => match env::var(format!("{}_FILE", key)) {
             Ok(path) => fs::read_to_string(path).ok(),
             Err(_) => None,
         },
-    }
-    .ok_or(Error::from(format!(
-        "Missing environment variable: {}",
-        key
-    )))
+    }) else {
+        panic!("");
+    };
+
+    println!("{} > {:?}", str, str.as_bytes());
+
+    Ok(str)
 }
 
 #[tokio::main]
