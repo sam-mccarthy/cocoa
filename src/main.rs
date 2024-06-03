@@ -25,19 +25,17 @@ struct Keys {
 }
 
 fn load_env(key: &str) -> Result<String, Error> {
-    let Some(str) = (match env::var(key) {
+    match env::var(key) {
         Ok(str) => Some(str),
         Err(_) => match env::var(format!("{}_FILE", key)) {
             Ok(path) => fs::read_to_string(path).ok(),
             Err(_) => None,
         },
-    }) else {
-        panic!("");
-    };
-
-    println!("{} > {:?}", str, str.as_bytes());
-
-    Ok(str)
+    }
+    .ok_or(Error::from(format!(
+        "Missing environment variable: {}",
+        key
+    )))
 }
 
 #[tokio::main]
@@ -47,8 +45,10 @@ async fn main() -> Result<(), Error> {
     let keys = Keys {
         discord_token: load_env("DISCORD_TOKEN")?,
         mongo_addr: load_env("MONGO_ADDR")?,
-        mongo_user: load_env("MONGO_USER")?,
-        mongo_pass: load_env("MONGO_PASS")?,
+        // The implementation of SASLprep is sensitive to whitespace,
+        // so we'll trim it here to make things a little less error-prone.
+        mongo_user: String::from(load_env("MONGO_USER")?.trim()),
+        mongo_pass: String::from(load_env("MONGO_PASS")?.trim()),
         lastfm_key: load_env("LASTFM_KEY")?,
     };
 
