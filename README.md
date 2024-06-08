@@ -15,19 +15,13 @@ Recently, I've gained a renewed fondness for the idea, and decided to take anoth
 
 ## Development
 
-The bot is currently still very early in development, and as such, there are many shortcuts that I've made for the sake
-of creating a proof-of-concept. The main issues right now are overall command / UX polish, error handling, logging, and
-command implementation.
-
-Polish, logging, and error handling will all be fixed in an upcoming rewrite of the LastFM flavor, which holds most of
-the commands - the LastFM section is just really messy.
+The bot is currently still very early in development, and as such, is relatively unstable. If you want to run the bot, 
+do so at your own discretion.
 
 Command implementation will come with time - I'm still not 100% sure on what I want to implement in the bot, and I'm not
 sure how I want to implement it either - I'd like some sort of economy, but it'll take some time to figure out the
 balance of it.
 
-I also think that some things could be streamlined / cleaned up a bit, and the code could do with some commenting.
+## Will this bot become available publicly? (i.e. with an officially hosted version)
 
-## Will this bot become available publicly?
-
-Not yet - I'd like to finish ironing out the details and making sure there aren't any major issues.
+Not yet - I'd like to finish ironing out the details and implementation and making sure there aren't any major issues.

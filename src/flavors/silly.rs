@@ -1,7 +1,8 @@
 use crate::{Context, Error};
+use crate::helper::discord::cocoa_reply_str;
 
 #[poise::command(prefix_command, slash_command)]
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
-    ctx.reply("pong!").await?;
+    cocoa_reply_str(ctx, String::from("pong!")).await?;
     Ok(())
 }

@@ -1,32 +1,36 @@
-use crate::helper::data;
-use log::info;
-use mongodb::options::Credential;
-use mongodb::{options::ClientOptions, Client, Collection};
-use poise::serenity_prelude as serenity;
 use std::{env, fs};
+
+use mongodb::Client;
+use mongodb::options::{ClientOptions, Credential};
+
+use poise::serenity_prelude as serenity;
+
+use log::{debug, error, info};
+
+use crate::helper::data::{find_user, insert_user, User};
+use crate::helper::discord::cocoa_reply_str;
 
 mod flavors;
 mod helper;
 
+// Error container for ease of error handling
+// Context container for simplicity of type
 type Error = Box<dyn std::error::Error + Send + Sync>;
-type Context<'a> = poise::Context<'a, Data, Error>;
+type Context<'a> = poise::Context<'a, mongodb::Collection<User>, Error>;
 
-struct Data {
-    collection: Collection<data::User>,
-    lastfm_key: String,
-}
-
+// Environment variable keys
 struct Keys {
     discord_token: String,
     mongo_addr: String,
     mongo_user: String,
     mongo_pass: String,
-    lastfm_key: String,
 }
 
+// Loads environment variables - optionally from files
 fn load_env(key: &str) -> Result<String, Error> {
     match env::var(key) {
         Ok(str) => Some(str),
+        // If the env. var. doesn't exist, check if there's a listed file for it
         Err(_) => match env::var(format!("{}_FILE", key)) {
             Ok(path) => fs::read_to_string(path).ok(),
             Err(_) => None,
@@ -49,9 +53,9 @@ async fn main() -> Result<(), Error> {
         // so we'll trim it here to make things a little less error-prone.
         mongo_user: String::from(load_env("MONGO_USER")?.trim()),
         mongo_pass: String::from(load_env("MONGO_PASS")?.trim()),
-        lastfm_key: load_env("LASTFM_KEY")?,
     };
 
+    // Load credentials for MongoDB into struct
     let mut client_options = ClientOptions::parse(format!("mongodb://{}", keys.mongo_addr)).await?;
     client_options.app_name = Some(String::from("cocoa"));
     client_options.credential = Some(
@@ -62,31 +66,39 @@ async fn main() -> Result<(), Error> {
             .build(),
     );
 
+    // Attempt connection, pull db and collection handles
     let client = Client::with_options(client_options).expect("Client connection failed.");
 
     let db = client.database("cocoa");
-    let collection = db.collection::<data::User>("users");
+    let collection = db.collection::<User>("users");
 
-    let ctx_data = Data {
-        collection,
-        lastfm_key: keys.lastfm_key,
-    };
-
-    let options: poise::FrameworkOptions<Data, Error> = poise::FrameworkOptions {
+    let options: poise::FrameworkOptions<mongodb::Collection<User>, Error> = poise::FrameworkOptions {
         commands: vec![
-            flavors::lastfm::link(),
-            flavors::lastfm::profile(),
-            flavors::lastfm::nowplaying(),
-            flavors::lastfm::recent(),
-            flavors::lastfm::topalbums(),
-            flavors::lastfm::topartists(),
-            flavors::lastfm::toptracks(),
             flavors::silly::ping(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: Some("-".into()),
             ..Default::default()
         },
+        pre_command: |context| Box::pin(async move {
+            // Here, we set the invocation data within the context to the DB's userdata.
+            // If no user is find, we insert a new one.
+            let collection = context.data();
+            let id = context.author().id.get();
+            context.set_invocation_data(match find_user(collection, id).await {
+                Ok(user) => user,
+                Err(_) => insert_user(collection, id).await.expect("Database insertion failed.")
+            }).await;
+
+            debug!("User {} ({}): Command {} executed", context.author().tag(), context.author().id, context.command().qualified_name);
+        }),
+        on_error: |error| Box::pin(async move {
+            // We want to handle errors with style (fancy embedding)
+            match error.ctx() {
+                Some(ctx) => { cocoa_reply_str(ctx, error.to_string()).await.ok(); },
+                None => error!("Error caught - missing context: {}", error.to_string())
+            };
+        }),
 
         ..Default::default()
     };
@@ -100,12 +112,13 @@ async fn main() -> Result<(), Error> {
                     _ready.user.name
                 );
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(ctx_data)
+                Ok(collection)
             })
         })
         .options(options)
         .build();
 
+    // We might need to expand the intents later, but for now this is fine
     let intents =
         serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
 
