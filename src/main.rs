@@ -1,13 +1,12 @@
 use std::{env, fs};
 
+use log::{debug, error, info, trace};
+use mongodb::bson::doc;
 use mongodb::Client;
 use mongodb::options::{ClientOptions, Credential};
-
 use poise::{FrameworkError, serenity_prelude as serenity};
 
-use log::{trace, debug, info, error, warn};
-
-use crate::helper::data::{find_user, insert_user, User};
+use crate::helper::data::{find_user, insert_user, update_user_inc, User};
 use crate::helper::discord::cocoa_reply_str;
 
 mod flavors;
@@ -33,13 +32,13 @@ fn load_env(key: &str) -> Result<String, Error> {
         Ok(str) => {
             debug!("Successfully loaded environment variable {}", key);
             Some(str)
-        },
+        }
         // If the env. var. doesn't exist, check if there's a listed file for it
         Err(_) => match env::var(format!("{}_FILE", key)) {
             Ok(path) => {
                 debug!("Loading {}_FILE from disk", key);
                 fs::read_to_string(path).ok()
-            },
+            }
             Err(_) => None,
         },
     }
@@ -83,42 +82,73 @@ async fn main() -> Result<(), Error> {
     debug!("Grabbing collection");
     let collection = db.collection::<User>("users");
 
-    let options: poise::FrameworkOptions<mongodb::Collection<User>, Error> = poise::FrameworkOptions {
-        commands: vec![
-            flavors::silly::ping(),
-            flavors::silly::pong(),
-        ],
-        prefix_options: poise::PrefixFrameworkOptions {
-            prefix: Some("-".into()),
+    let options: poise::FrameworkOptions<mongodb::Collection<User>, Error> =
+        poise::FrameworkOptions {
+            commands: vec![
+                flavors::silly::ping(),
+                flavors::silly::pong(),
+                flavors::user::commands(),
+                flavors::user::profile(),
+            ],
+            prefix_options: poise::PrefixFrameworkOptions {
+                // This is only going to temporarily be +, until guild settings are added
+                prefix: Some("+".into()),
+                ..Default::default()
+            },
+            pre_command: |context| {
+                Box::pin(async move {
+                    // Here, we set the invocation data within the context to the DB's userdata.
+                    // If no user is find, we insert a new one.
+                    let collection = context.data();
+                    let tag = context.author().tag();
+                    let id = context.author().id.get();
+
+                    context
+                        .set_invocation_data(match find_user(collection, id).await {
+                            Ok(user) => user,
+                            Err(_) => {
+                                debug!("Couldn't find user {} ({}), inserting new", tag, id);
+                                insert_user(collection, id)
+                                    .await
+                                    .expect("Database user insertion failed.")
+                            }
+                        })
+                        .await;
+
+                    debug!(
+                        "User {} ({}): Command {} executed",
+                        context.author().tag(),
+                        context.author().id,
+                        context.command().qualified_name
+                    );
+                })
+            },
+            post_command: |context| {
+                Box::pin(async move {
+                    // We need to update the running command count for the user.
+                    update_user_inc(
+                        context.data(),
+                        context.author().id.get(),
+                        doc! { "command_count": 1},
+                    )
+                    .await
+                    .expect("Database user update failed.");
+                })
+            },
+            on_error: |error| {
+                Box::pin(async move {
+                    // We want to handle errors with style (fancy embedding)
+                    match error {
+                        FrameworkError::Command { error, ctx, .. } => {
+                            cocoa_reply_str(ctx, error.to_string()).await.ok();
+                        }
+                        _ => error!("Generic error: {}", error),
+                    };
+                })
+            },
+
             ..Default::default()
-        },
-        pre_command: |context| Box::pin(async move {
-            // Here, we set the invocation data within the context to the DB's userdata.
-            // If no user is find, we insert a new one.
-            let collection = context.data();
-            let id = context.author().id.get();
-            context.set_invocation_data(match find_user(collection, id).await {
-                Ok(user) => user,
-                Err(_) => insert_user(collection, id).await.expect("Database insertion failed.")
-            }).await;
-
-            debug!("User {} ({}): Command {} executed", context.author().tag(), context.author().id, context.command().qualified_name);
-        }),
-        post_command: |context| Box::pin(async move {
-
-        }),
-        on_error: |error| Box::pin(async move {
-            // We want to handle errors with style (fancy embedding)
-            match error {
-                FrameworkError::Command { error, ctx } => {
-                    cocoa_reply_str(ctx, error.to_string()).await.ok();
-                }
-                _ => error!("Generic error: {}", error)
-            }
-        }),
-
-        ..Default::default()
-    };
+        };
 
     info!("Setting up framework and registering slash commands");
     let framework = poise::Framework::builder()
