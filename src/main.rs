@@ -3,9 +3,9 @@ use std::{env, fs};
 use mongodb::Client;
 use mongodb::options::{ClientOptions, Credential};
 
-use poise::serenity_prelude as serenity;
+use poise::{FrameworkError, serenity_prelude as serenity};
 
-use log::{debug, error, info};
+use log::{trace, debug, info, error, warn};
 
 use crate::helper::data::{find_user, insert_user, User};
 use crate::helper::discord::cocoa_reply_str;
@@ -28,11 +28,18 @@ struct Keys {
 
 // Loads environment variables - optionally from files
 fn load_env(key: &str) -> Result<String, Error> {
+    trace!("Loading environment variable {}", key);
     match env::var(key) {
-        Ok(str) => Some(str),
+        Ok(str) => {
+            debug!("Successfully loaded environment variable {}", key);
+            Some(str)
+        },
         // If the env. var. doesn't exist, check if there's a listed file for it
         Err(_) => match env::var(format!("{}_FILE", key)) {
-            Ok(path) => fs::read_to_string(path).ok(),
+            Ok(path) => {
+                debug!("Loading {}_FILE from disk", key);
+                fs::read_to_string(path).ok()
+            },
             Err(_) => None,
         },
     }
@@ -54,6 +61,7 @@ async fn main() -> Result<(), Error> {
         mongo_user: String::from(load_env("MONGO_USER")?.trim()),
         mongo_pass: String::from(load_env("MONGO_PASS")?.trim()),
     };
+    info!("Loaded environment variables");
 
     // Load credentials for MongoDB into struct
     let mut client_options = ClientOptions::parse(format!("mongodb://{}", keys.mongo_addr)).await?;
@@ -66,15 +74,19 @@ async fn main() -> Result<(), Error> {
             .build(),
     );
 
+    info!("Connecting to MongoDB");
     // Attempt connection, pull db and collection handles
-    let client = Client::with_options(client_options).expect("Client connection failed.");
+    let client = Client::with_options(client_options).unwrap();
 
+    debug!("Grabbing database");
     let db = client.database("cocoa");
+    debug!("Grabbing collection");
     let collection = db.collection::<User>("users");
 
     let options: poise::FrameworkOptions<mongodb::Collection<User>, Error> = poise::FrameworkOptions {
         commands: vec![
             flavors::silly::ping(),
+            flavors::silly::pong(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: Some("-".into()),
@@ -92,22 +104,28 @@ async fn main() -> Result<(), Error> {
 
             debug!("User {} ({}): Command {} executed", context.author().tag(), context.author().id, context.command().qualified_name);
         }),
+        post_command: |context| Box::pin(async move {
+
+        }),
         on_error: |error| Box::pin(async move {
             // We want to handle errors with style (fancy embedding)
-            match error.ctx() {
-                Some(ctx) => { cocoa_reply_str(ctx, error.to_string()).await.ok(); },
-                None => error!("Error caught - missing context: {}", error.to_string())
-            };
+            match error {
+                FrameworkError::Command { error, ctx } => {
+                    cocoa_reply_str(ctx, error.to_string()).await.ok();
+                }
+                _ => error!("Generic error: {}", error)
+            }
         }),
 
         ..Default::default()
     };
 
+    info!("Setting up framework and registering slash commands");
     let framework = poise::Framework::builder()
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
                 info!(
-                    "Logged into {} guilds as {}",
+                    "Logged into {} guild(s) as {}",
                     _ready.guilds.len(),
                     _ready.user.name
                 );
@@ -126,6 +144,7 @@ async fn main() -> Result<(), Error> {
         .framework(framework)
         .await;
 
+    info!("Starting client");
     match client?.start().await {
         Ok(_) => Ok(()),
         Err(e) => Err(Error::from(e.to_string())),
